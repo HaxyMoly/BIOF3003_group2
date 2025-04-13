@@ -17,7 +17,7 @@ interface MonitorControlsProps {
 
 const HeartRateMonitor: React.FC<MonitorControlsProps> = ({
   isConnected, isECGStreaming, connect, disconnect,
-  startECGStream, stopECGStream, error, heartRate
+  startECGStream, stopECGStream, error
 }) => {
   const [subjectId, setSubjectId] = useState<string>('');
   const [meditationType, setMeditationType] = useState<MeditationType>('mindfulness');
@@ -94,13 +94,6 @@ const HeartRateMonitor: React.FC<MonitorControlsProps> = ({
           </div>
         ) : (
           <div className="space-y-6">
-            <div className="bg-gray-100 rounded-lg p-4 flex items-center justify-between">
-              <span className="text-lg font-semibold text-gray-700">Heart Rate:</span>
-              <span className="text-2xl font-bold text-blue-600">
-                {heartRate ? `${heartRate} BPM` : 'Waiting for data...'}
-              </span>
-            </div>
-            
             <div className="flex space-x-4">
               <button 
                 onClick={disconnect}
@@ -114,14 +107,14 @@ const HeartRateMonitor: React.FC<MonitorControlsProps> = ({
                   onClick={startECGStream}
                   className="bg-green-500 hover:bg-green-600 text-white font-bold py-2 px-4 rounded-full transition duration-300 ease-in-out transform hover:scale-105"
                 >
-                  Start ECG Stream
+                  Start Session
                 </button>
               ) : (
                 <button 
                   onClick={stopECGStream}
                   className="bg-yellow-500 hover:bg-yellow-600 text-white font-bold py-2 px-4 rounded-full transition duration-300 ease-in-out transform hover:scale-105"
                 >
-                  Stop ECG Stream
+                  End Session
                 </button>
               )}
             </div>
