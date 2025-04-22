@@ -65,6 +65,11 @@ const ECGChart: React.FC<ECGChartProps> = ({ ecgData }) => {
     },
   };
 
+  // Handle empty data gracefully
+  if (!Array.isArray(ecgData) || ecgData.length === 0) {
+    return <p className="text-gray-500">No ECG data available.</p>;
+  }
+
   return (
     <div style={{ width: '100%', maxWidth: '800px' }}>
       <Line options={chartOptions} data={ecgChartData} />
