@@ -1,5 +1,5 @@
 "use client";
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 
 // Meditation Types
 type MeditationType = "mindfulness" | "meditation";
@@ -13,7 +13,13 @@ interface MonitorControlsProps {
   stopECGStream: () => void;
   error: string | null;
   heartRate: number | null;
-  onMeditationTypeChange: (type: MeditationType) => void; // Callback to update meditation type
+  onMeditationTypeChange: (type: MeditationType) => void;
+  onSubjectIdChange?: (id: string) => void; // 添加这个属性
+  onSessionEnd?: (sessionData: {
+    subjectId: string;
+    meditationType: MeditationType;
+    sessionDuration: number;
+  }) => void; // Callback for session end
 }
 
 const HeartRateMonitor: React.FC<MonitorControlsProps> = ({
@@ -24,19 +30,37 @@ const HeartRateMonitor: React.FC<MonitorControlsProps> = ({
   startECGStream,
   stopECGStream,
   error,
-  onMeditationTypeChange, // Extract the callback
+  heartRate,
+  onMeditationTypeChange,
+  onSubjectIdChange, // 添加这个参数
+  onSessionEnd,
 }) => {
   const [subjectId, setSubjectId] = useState<string>("");
   const [meditationType, setMeditationType] = useState<MeditationType>("mindfulness");
   const [formValid, setFormValid] = useState<boolean>(false);
+  const [sessionStartTime, setSessionStartTime] = useState<number | null>(null);
+
+  // 新增：当subjectId变化时，通知父组件
+  useEffect(() => {
+    if (onSubjectIdChange && subjectId) {
+      onSubjectIdChange(subjectId);
+    }
+  }, [subjectId, onSubjectIdChange]);
 
   const validateForm = () => {
     setFormValid(subjectId.trim() !== "");
   };
 
   const handleSubjectIdChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    setSubjectId(e.target.value);
+    const newSubjectId = e.target.value;
+    setSubjectId(newSubjectId);
     validateForm();
+    
+    // 添加这段代码，当subjectId变化时通知父组件
+    if (onSubjectIdChange) {
+      onSubjectIdChange(newSubjectId);
+      console.log("HeartRateMonitor: 已更新subjectId:", newSubjectId);
+    }
   };
 
   const handleMeditationTypeChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
@@ -49,8 +73,33 @@ const HeartRateMonitor: React.FC<MonitorControlsProps> = ({
     if (formValid) {
       console.log("Subject ID:", subjectId);
       console.log("Meditation Type:", meditationType);
+      
+      // 添加这段代码，确保在连接时也传递subjectId
+      if (onSubjectIdChange) {
+        onSubjectIdChange(subjectId);
+        console.log("HeartRateMonitor: 连接时传递subjectId:", subjectId);
+      }
+      
       await connect();
     }
+  };
+
+  const handleStartSession = async () => {
+    setSessionStartTime(Date.now());
+    await startECGStream();
+  };
+
+  const handleEndSession = async () => {
+    if (sessionStartTime && onSessionEnd) {
+      const sessionDuration = Math.round((Date.now() - sessionStartTime) / 1000); // Duration in seconds
+      onSessionEnd({
+        subjectId,
+        meditationType,
+        sessionDuration,
+      });
+    }
+    await stopECGStream();
+    setSessionStartTime(null);
   };
 
   return (
@@ -117,14 +166,14 @@ const HeartRateMonitor: React.FC<MonitorControlsProps> = ({
 
               {!isECGStreaming ? (
                 <button
-                  onClick={startECGStream}
+                  onClick={handleStartSession}
                   className="bg-green-500 hover:bg-green-600 text-white font-bold py-2 px-4 rounded-full transition duration-300 ease-in-out transform hover:scale-105"
                 >
                   Start Session
                 </button>
               ) : (
                 <button
-                  onClick={stopECGStream}
+                  onClick={handleEndSession}
                   className="bg-yellow-500 hover:bg-yellow-600 text-white font-bold py-2 px-4 rounded-full transition duration-300 ease-in-out transform hover:scale-105"
                 >
                   End Session

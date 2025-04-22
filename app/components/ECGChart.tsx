@@ -12,41 +12,53 @@ interface ECGDataPoint {
 
 interface ECGChartProps {
   ecgData: ECGDataPoint[];
-}      
+}
 
 const ECGChart: React.FC<ECGChartProps> = ({ ecgData }) => {
+  const dataToShow = ecgData.slice(-1000);
+  
   const formatTimestamp = (timestamp: number): string => {
     try {
-      return new Date(timestamp).toISOString();
+      const date = new Date(timestamp);
+      return date.toTimeString().split(' ')[0] + '.' + date.getMilliseconds().toString().padStart(3, '0');
     } catch (error) {
       console.error('Invalid timestamp:', timestamp);
-      console.error(error);
-      return 'Invalid Date';
+      return '';
     }
   };
 
   const ecgChartData = {
-    labels: ecgData.slice(-5000).map((point, index) => formatTimestamp(point.timestamp) || index.toString()),
+    labels: dataToShow.map((point) => formatTimestamp(point.timestamp)),
     datasets: [
       {
         label: 'ECG',
-        data: ecgData.slice(-5000).map(point => point.value),
+        data: dataToShow.map(point => point.value),
         borderColor: 'rgb(75, 192, 192)',
         backgroundColor: 'rgba(75, 192, 192, 0.5)',
+        borderWidth: 1.5,
+        pointRadius: 0,
+        tension: 0.2,
       },
     ],
   };
 
   const chartOptions = {
     responsive: true,
+    maintainAspectRatio: false,
+    animation: {
+      duration: 0
+    },
     plugins: {
       legend: {
         position: 'top' as const,
       },
       title: {
         display: true,
-        text: 'ECG Data',
+        text: 'Real-time ECG',
       },
+      tooltip: {
+        enabled: false
+      }
     },
     scales: {
       x: {
@@ -55,23 +67,34 @@ const ECGChart: React.FC<ECGChartProps> = ({ ecgData }) => {
           display: true,
           text: 'Time',
         },
+        ticks: {
+          maxTicksLimit: 10,
+          maxRotation: 0,
+          autoSkip: true
+        },
+        grid: {
+          color: 'rgba(0, 0, 0, 0.1)',
+        }
       },
       y: {
         title: {
           display: true,
-          text: 'ECG Value (µV)',
+          text: 'Voltage (µV)',
         },
+        grid: {
+          color: 'rgba(0, 0, 0, 0.1)',
+        }
       },
     },
   };
 
   // Handle empty data gracefully
   if (!Array.isArray(ecgData) || ecgData.length === 0) {
-    return <p className="text-gray-500">No ECG data available.</p>;
+    return <p className="text-gray-500">No ECG data</p>;
   }
 
   return (
-    <div style={{ width: '100%', maxWidth: '800px' }}>
+    <div className="ecg-container" style={{ width: '100%', height: '400px', maxWidth: '1000px' }}>
       <Line options={chartOptions} data={ecgChartData} />
     </div>
   );

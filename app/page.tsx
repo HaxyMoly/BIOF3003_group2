@@ -1,5 +1,5 @@
 "use client";
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { useHeartRateSensor } from "./hooks/useHeartRateSensor";
 import { useRespiratoryRate } from "./hooks/useRespiratoryRate";
 import HeartRateMonitor from "./components/HeartRateMonitor";
@@ -8,6 +8,8 @@ import HRVChart from "./components/HRVChart";
 import FeedbackSection from "./components/FeedbackSection";
 import PerformanceSummary from "./components/PerformanceSummary";
 import AudioReminder from "./components/AudioReminder";
+import SessionHistory from "./components/SessionHistory";
+import { useSessionData } from "./hooks/useSessionData";
 import { playBackgroundMusic, stopBackgroundMusic } from "./utils/backgroundMusic";
 
 export default function Home() {
@@ -24,6 +26,7 @@ export default function Home() {
   } = useHeartRateSensor();
 
   const { respiratoryRate } = useRespiratoryRate(ecgData);
+  const { saveSession } = useSessionData();
 
   const [finalHeartRate, setFinalHeartRate] = useState<number | null>(null);
   const [currentHRV, setCurrentHRV] = useState<number | null>(null);
@@ -32,25 +35,90 @@ export default function Home() {
   const [selectedMeditationType, setSelectedMeditationType] = useState<'meditation' | 'mindfulness'>('mindfulness');
   const [backgroundMusic, setBackgroundMusic] = useState<HTMLAudioElement | null>(null); // State for background music
   const [isMusicPlaying, setIsMusicPlaying] = useState<boolean>(false); // Track music state
+  const [subjectId, setSubjectId] = useState<string>("");
+  const [sessionStartTime, setSessionStartTime] = useState<number | null>(null);
+  const [historyRefreshTrigger, setHistoryRefreshTrigger] = useState<number>(0);
+  // 修改初始状态，默认显示历史记录
+  const [showHistory, setShowHistory] = useState<boolean>(true);
 
   const handleStartSession = async () => {
     setSessionStarted(true);
+    setSessionStartTime(Date.now());
     await startECGStream();
   };
 
-  const handleEndSession = () => {
+  // 在HeartRateMonitor组件中添加onSubjectIdChange属性
+  // 删除这段错误放置的代码
+  // <HeartRateMonitor
+  //   isConnected={isConnected}
+  //   isECGStreaming={isECGStreaming}
+  //   connect={connect}
+  //   disconnect={disconnectSensor}
+  //   startECGStream={handleStartSession}
+  //   stopECGStream={stopECGStream}
+  //   error={error}
+  //   heartRate={heartRate}
+  //   onMeditationTypeChange={setSelectedMeditationType}
+  //   onSubjectIdChange={setSubjectId} // 新增：直接从HeartRateMonitor获取Subject ID
+  // />
+
+  const handleEndSession = async () => {
     setFinalHRV(currentHRV);
     setFinalHeartRate(heartRate);
+    
+    // Calculate session duration in seconds
+    if (sessionStartTime) {
+      const sessionDuration = Math.round((Date.now() - sessionStartTime) / 1000);
+      
+      // 不再从DOM获取subjectId，而是直接使用state中的值
+      if (subjectId) {
+        console.log("Page: 准备保存会话数据", {
+          subjectId: subjectId,
+          meditationType: selectedMeditationType,
+          heartRate: heartRate || 0,
+          hrv: currentHRV || 0,
+          respiratoryRate: respiratoryRate || 0,
+          sessionDuration: sessionDuration,
+        });
+        
+        try {
+          // Save session data to MongoDB
+          await saveSession({
+            subjectId: subjectId,
+            meditationType: selectedMeditationType,
+            heartRate: heartRate || 0,
+            hrv: currentHRV || 0,
+            respiratoryRate: respiratoryRate || 0,
+            sessionDuration: sessionDuration,
+          });
+          console.log("Page: 会话数据保存成功");
+        } catch (error) {
+          console.error("Page: 会话数据保存失败", error);
+        }
+        
+        // Show history after saving and trigger refresh
+        setShowHistory(true);
+        setHistoryRefreshTrigger(Date.now());
+        console.log("Page: 已触发历史数据刷新", Date.now());
+      } else {
+        console.warn("Page: subjectId为空，无法保存会话数据");
+      }
+    } else {
+      console.warn("Page: sessionStartTime未设置，无法计算会话时长");
+    }
+    
     stopECGStream();
     stopBackgroundMusic(backgroundMusic); // Stop music when session ends
     setIsMusicPlaying(false);
   };
 
+  // 修改handleDisconnect函数，不再隐藏历史记录
   const handleDisconnect = () => {
     disconnectSensor();
     setSessionStarted(false);
     setFinalHeartRate(null);
     setFinalHRV(null);
+    // 移除了setShowHistory(false)这一行
     stopBackgroundMusic(backgroundMusic); // Stop music when disconnected
     setIsMusicPlaying(false);
   };
@@ -68,8 +136,9 @@ export default function Home() {
       setIsMusicPlaying(true); // Update state to reflect that music is playing
     }
   };
+  
   // Cleanup function to stop music when the component unmounts
-  React.useEffect(() => {
+  useEffect(() => {
     return () => {
       stopBackgroundMusic(backgroundMusic);
     };
@@ -89,6 +158,7 @@ export default function Home() {
         error={error}
         heartRate={heartRate}
         onMeditationTypeChange={setSelectedMeditationType}
+        onSubjectIdChange={setSubjectId} // 在这里添加onSubjectIdChange属性
       />
 
       {/* Audio Reminder Component */}
@@ -202,6 +272,14 @@ export default function Home() {
           />
         </div>
       )}
+      
+      {/* Session History Section - 始终显示，不再有条件判断 */}
+      <div className="max-w-4xl mx-auto mt-8">
+        <SessionHistory 
+          subjectId={subjectId} 
+          refreshTrigger={historyRefreshTrigger} 
+        />
+      </div>
     </div>
   );
 }
