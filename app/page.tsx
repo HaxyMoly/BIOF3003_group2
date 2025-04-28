@@ -1,9 +1,9 @@
 "use client";
 import React, { useState, useEffect } from "react";
-import { useHeartRateSensor } from "./hooks/useHeartRateSensor";
-import { useRespiratoryRate } from "./hooks/useRespiratoryRate";
-import HeartRateMonitor from "./components/HeartRateMonitor";
-import ECGChart from "./components/ECGChart";
+import { useHeartRateSensor } from './hooks/useHeartRateSensor';
+import { useRespiratoryRate } from './hooks/useRespiratoryRate';
+import HeartRateMonitor from './components/HeartRateMonitor';
+import ECGChart from './components/ECGChart';
 import HRVChart from "./components/HRVChart";
 import FeedbackSection from "./components/FeedbackSection";
 import PerformanceSummary from "./components/PerformanceSummary";
@@ -11,6 +11,7 @@ import AudioReminder from "./components/AudioReminder";
 import SessionHistory from "./components/SessionHistory";
 import { useSessionData } from "./hooks/useSessionData";
 import { playBackgroundMusic, stopBackgroundMusic } from "./utils/backgroundMusic";
+import DynamicPerformanceSummary from "./components/DynamicPerformanceSummary";
 
 export default function Home() {
   const {
@@ -26,7 +27,7 @@ export default function Home() {
   } = useHeartRateSensor();
 
   const { respiratoryRate } = useRespiratoryRate(ecgData);
-  const { saveSession } = useSessionData();
+  const { saveSession, fetchSessions } = useSessionData();  // Add fetchSessions here
 
   const [finalHeartRate, setFinalHeartRate] = useState<number | null>(null);
   const [currentHRV, setCurrentHRV] = useState<number | null>(null);
@@ -40,13 +41,15 @@ export default function Home() {
   const [historyRefreshTrigger, setHistoryRefreshTrigger] = useState<number>(0);
   // 修改初始状态，默认显示历史记录
   const [showHistory, setShowHistory] = useState<boolean>(true);
-
+  const [showPerformanceSummary, setShowPerformanceSummary] = useState<boolean>(false);
+  const [previousSession, setPreviousSession] = useState<any>(null);
+  
   const handleStartSession = async () => {
     setSessionStarted(true);
     setSessionStartTime(Date.now());
     await startECGStream();
   };
-
+  
   // 在HeartRateMonitor组件中添加onSubjectIdChange属性
   // 删除这段错误放置的代码
   // <HeartRateMonitor
@@ -82,6 +85,12 @@ export default function Home() {
         });
         
         try {
+          // Get previous session before saving new one
+          const previousSessions = await fetchSessions(subjectId);
+          if (previousSessions && previousSessions.length > 0) {
+            setPreviousSession(previousSessions[0]);
+          }
+          
           // Save session data to MongoDB
           await saveSession({
             subjectId: subjectId,
@@ -92,6 +101,9 @@ export default function Home() {
             sessionDuration: sessionDuration,
           });
           console.log("Page: 会话数据保存成功");
+          
+          // Show performance summary
+          setShowPerformanceSummary(true);
         } catch (error) {
           console.error("Page: 会话数据保存失败", error);
         }
@@ -112,14 +124,14 @@ export default function Home() {
     setIsMusicPlaying(false);
   };
 
-  // 修改handleDisconnect函数，不再隐藏历史记录
+  // Modified handleDisconnect to reset the performance summary
   const handleDisconnect = () => {
     disconnectSensor();
     setSessionStarted(false);
     setFinalHeartRate(null);
     setFinalHRV(null);
-    // 移除了setShowHistory(false)这一行
-    stopBackgroundMusic(backgroundMusic); // Stop music when disconnected
+    setShowPerformanceSummary(false); // Hide performance summary when disconnecting
+    stopBackgroundMusic(backgroundMusic);
     setIsMusicPlaying(false);
   };
 
@@ -187,6 +199,22 @@ export default function Home() {
           >
           {isMusicPlaying ? "Stop Music" : "Play Music"}
           </button>
+        </div>
+      )}
+
+      {/* Dynamic Performance Summary - shown after session ends */}
+      {showPerformanceSummary && finalHeartRate && (
+        <div className="max-w-4xl mx-auto mt-8 bg-white p-6 rounded-lg shadow-lg border-2 border-green-400">
+          <DynamicPerformanceSummary
+            currentSession={{
+              heartRate: finalHeartRate,
+              hrv: finalHRV || 0,
+              respiratoryRate: respiratoryRate || 0,
+              meditationType: selectedMeditationType,
+              sessionDuration: sessionStartTime ? Math.round((Date.now() - sessionStartTime) / 1000) : 0
+            }}
+            previousSession={previousSession}
+          />
         </div>
       )}
 
@@ -280,6 +308,7 @@ export default function Home() {
           refreshTrigger={historyRefreshTrigger} 
         />
       </div>
+      
     </div>
   );
 }

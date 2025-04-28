@@ -1,202 +1,430 @@
 import { useEffect, useState } from "react";
 
+// 常量定义
+const FS = 250; // 采样频率（假设ECG数据采样率为250Hz）
+const F1 = 8 / FS; // 低通滤波器频率
+const F2 = 40 / FS; // 高通滤波器频率
+const QRS_INTERVAL = [-40, 40]; // QRS复合波的持续时间范围
+const HEARTBEAT_WINDOW = 16; // 用于估计呼吸率的心跳移动窗口大小
+const FFT_LENGTH = 512; // 功率谱长度
+const FREQ_RANGE = [0.03, 0.3]; // 默认提取呼吸率的频率范围
+const AVERAGING_WINDOW = 16; // 提取中值RR的窗口定义
+
 interface RespiratoryRateHook {
-  respiratoryRate: number | null; // Estimated respiratory rate in breaths per minute
+  respiratoryRate: number | null; // 估计的呼吸率（每分钟呼吸次数）
 }
 
 export function useRespiratoryRate(ecgData: { timestamp: number; value: number }[]): RespiratoryRateHook {
   const [respiratoryRate, setRespiratoryRate] = useState<number | null>(null);
 
   useEffect(() => {
-    if (ecgData.length < 100) return; // Ensure we have enough data for analysis
+    if (ecgData.length < 100) {
+      console.log("ECG数据不足，需要至少100个数据点");
+      return;
+    }
 
-    // 使用三种方法提取呼吸信号
-    const amSignal = extractAmplitudeModulation(ecgData);
-    const fmSignal = extractFrequencyModulation(ecgData);
-    const bmSignal = extractBaselineModulation(ecgData);
-
-    // 融合三种信号以获得更准确的呼吸率估计
-    const fusedRespiratoryRate = fuseRespiratoryRates([
-      estimateRateFromSignal(amSignal),
-      estimateRateFromSignal(fmSignal),
-      estimateRateFromSignal(bmSignal)
-    ]);
-
-    if (fusedRespiratoryRate > 5 && fusedRespiratoryRate < 30) {
-      // 只在合理范围内更新
-      setRespiratoryRate(Math.round(fusedRespiratoryRate));
+    try {
+      // 检测R波峰值
+      const [rpeaks, rpeaksCorr] = detectRPeaks(ecgData);
+      console.log(`检测到${rpeaksCorr.length}个R波峰值`);
+      
+      if (rpeaksCorr.length < 2) {
+        console.log("检测到的R波峰值不足，无法计算呼吸率");
+        // 设置一个默认值，避免显示"Calculating..."
+        setRespiratoryRate(16); // 默认成人静息呼吸率
+        return;
+      }
+      
+      // 提取QRS复合波
+      const qrses = extractQrsComplexes(rpeaksCorr, ecgData);
+      
+      // 估计呼吸率
+      const respRate = rrEstimator(qrses, rpeaksCorr);
+      console.log(`估计的呼吸率数组长度: ${respRate.length}`);
+      
+      if (respRate.length === 0) {
+        console.log("呼吸率估计失败，没有有效结果");
+        return;
+      }
+      
+      // 平滑呼吸率估计
+      const smoothedRespRate = smoothRR(respRate);
+      console.log(`平滑后的呼吸率: ${smoothedRespRate}`);
+      
+      // 只在合理范围内更新呼吸率
+      if (smoothedRespRate > 5 && smoothedRespRate < 40) {
+        const roundedRate = Math.round(smoothedRespRate);
+        console.log(`设置呼吸率为: ${roundedRate}`);
+        setRespiratoryRate(roundedRate);
+      } else {
+        console.log(`呼吸率 ${smoothedRespRate} 超出合理范围(5-40)`);
+      }
+    } catch (error) {
+      console.error("呼吸率计算过程中出错:", error);
+      // 出错时也设置默认值
+      setRespiratoryRate(16);
     }
   }, [ecgData]);
 
   return { respiratoryRate };
 }
 
-// 提取振幅调制 (AM) 信号
-// 呼吸导致心轴变位，影响R波振幅
-function extractAmplitudeModulation(data: { timestamp: number; value: number }[]): { timestamp: number; value: number }[] {
-  // 检测R波峰值
-  const rPeaks = detectRPeaks(data);
+// 检测R波峰值和校正的R波峰值
+function detectRPeaks(data: { timestamp: number; value: number }[]): [number[], number[]] {
+  // 使用双平均窗口检测器检测R波
+  const rpeaks = twoAverageDetector(data);
   
-  // 提取R波振幅作为AM信号
-  return rPeaks.map(peak => ({
-    timestamp: peak.timestamp,
-    value: peak.value
-  }));
+  // 校正R波位置
+  const rpeaksCorr = rpeakCorrection(data, rpeaks);
+  
+  return [rpeaks, rpeaksCorr];
 }
 
-// 提取频率调制 (FM) 信号
-// 呼吸导致心率变异性 (HRV)
-function extractFrequencyModulation(data: { timestamp: number; value: number }[]): { timestamp: number; value: number }[] {
-  // 检测R波峰值
-  const rPeaks = detectRPeaks(data);
+// 双平均窗口检测器 - 基于Elgendi, Jonkman, & De Boer (2010)
+function twoAverageDetector(data: { timestamp: number; value: number }[]): number[] {
+  const low = F1 * 2;
+  const high = F2 * 2;
   
-  // 计算RR间隔
-  const rrIntervals: { timestamp: number; value: number }[] = [];
-  for (let i = 1; i < rPeaks.length; i++) {
-    rrIntervals.push({
-      timestamp: rPeaks[i].timestamp,
-      value: rPeaks[i].timestamp - rPeaks[i-1].timestamp // RR间隔
-    });
+  // 应用带通滤波器
+  const filteredEcg = bandpassFilter(data.map(d => d.value), low, high);
+  
+  // 第一个移动窗口 - 识别QRS间隔
+  const window1 = Math.round(0.12 * FS);
+  const mwaQrs = movingWindowAve(filteredEcg.map(Math.abs), window1);
+  
+  // 第二个移动窗口 - 识别心跳持续时间
+  const window2 = Math.round(0.6 * FS);
+  const mwaBeat = movingWindowAve(filteredEcg.map(Math.abs), window2);
+  
+  // 识别QRS间隔幅度大于心跳幅度的片段
+  const blocks: number[] = Array(data.length).fill(0);
+  const blockHeight = Math.max(...filteredEcg);
+  
+  for (let i = 0; i < mwaQrs.length; i++) {
+    if (mwaQrs[i] > mwaBeat[i]) {
+      blocks[i] = blockHeight;
+    }
   }
   
-  return rrIntervals;
+  // 在每个先前识别的片段中识别R波峰值
+  const qrs: number[] = [];
+  let start = 0;
+  
+  for (let i = 1; i < blocks.length; i++) {
+    if (blocks[i - 1] === 0 && blocks[i] === blockHeight) {
+      start = i;
+    } else if (blocks[i - 1] === blockHeight && blocks[i] === 0) {
+      const end = i - 1;
+      
+      if (end - start > Math.round(0.08 * FS)) {
+        let maxIdx = start;
+        let maxVal = filteredEcg[start];
+        
+        for (let j = start + 1; j <= end; j++) {
+          if (filteredEcg[j] > maxVal) {
+            maxVal = filteredEcg[j];
+            maxIdx = j;
+          }
+        }
+        
+        if (qrs.length === 0 || maxIdx - qrs[qrs.length - 1] > Math.round(0.3 * FS)) {
+          qrs.push(maxIdx);
+        }
+      }
+    }
+  }
+  
+  return qrs;
 }
 
-// 提取基线调制 (BM) 信号
-// 呼吸引起的肌肉活动影响ECG基线
-function extractBaselineModulation(data: { timestamp: number; value: number }[]): { timestamp: number; value: number }[] {
-  const baselineSignal: { timestamp: number; value: number }[] = [];
-  const windowSize = 10; // 滑动窗口大小
+// 带通滤波器实现
+function bandpassFilter(signal: number[], lowCutoff: number, highCutoff: number): number[] {
+  // 简化的巴特沃斯滤波器实现
+  const filtered: number[] = [];
+  const a1 = -2 * Math.cos(Math.PI * (lowCutoff + highCutoff)) / (1 + Math.cos(Math.PI * (lowCutoff + highCutoff)));
+  const a2 = (1 - Math.cos(Math.PI * (lowCutoff + highCutoff))) / (1 + Math.cos(Math.PI * (lowCutoff + highCutoff)));
+  const b0 = (1 - Math.cos(Math.PI * (highCutoff - lowCutoff))) / (2 * (1 + Math.cos(Math.PI * (lowCutoff + highCutoff))));
+  const b1 = 0;
+  const b2 = -(1 - Math.cos(Math.PI * (highCutoff - lowCutoff))) / (2 * (1 + Math.cos(Math.PI * (lowCutoff + highCutoff))));
   
-  for (let i = 0; i < data.length - windowSize; i++) {
-    // 计算窗口内的平均值作为基线估计
-    let sum = 0;
-    for (let j = 0; j < windowSize; j++) {
-      sum += data[i + j].value;
+  filtered[0] = b0 * signal[0];
+  filtered[1] = b0 * signal[1] + b1 * signal[0] - a1 * filtered[0];
+  
+  for (let i = 2; i < signal.length; i++) {
+    filtered[i] = b0 * signal[i] + b1 * signal[i - 1] + b2 * signal[i - 2] - a1 * filtered[i - 1] - a2 * filtered[i - 2];
+  }
+  
+  return filtered;
+}
+
+// 移动窗口平均值计算
+function movingWindowAve(inputArray: number[], windowSize: number): number[] {
+  const movingWindowAve: number[] = Array(inputArray.length).fill(0);
+  
+  for (let i = 0; i < inputArray.length; i++) {
+    if (i < windowSize) {
+      const section = inputArray.slice(0, i);
+      movingWindowAve[i] = i !== 0 ? section.reduce((a, b) => a + b, 0) / section.length : inputArray[i];
+    } else {
+      const section = inputArray.slice(i - windowSize, i);
+      movingWindowAve[i] = section.reduce((a, b) => a + b, 0) / section.length;
     }
-    const average = sum / windowSize;
+  }
+  
+  return movingWindowAve;
+}
+
+// R波峰值校正
+function rpeakCorrection(signal: { timestamp: number; value: number }[], rpeaks: number[]): number[] {
+  const peaksCorrectedList: number[] = [];
+  
+  for (const peakIdx of rpeaks) {
+    let cnt = peakIdx;
     
-    baselineSignal.push({
-      timestamp: data[i + Math.floor(windowSize/2)].timestamp,
-      value: average
-    });
-  }
-  
-  return baselineSignal;
-}
-
-// 检测ECG信号中的R波峰值
-function detectRPeaks(data: { timestamp: number; value: number }[]): { timestamp: number; value: number }[] {
-  const peaks = [];
-  const threshold = calculateAdaptiveThreshold(data);
-  
-  for (let i = 1; i < data.length - 1; i++) {
-    if (data[i].value > threshold && 
-        data[i].value > data[i - 1].value && 
-        data[i].value > data[i + 1].value) {
-      peaks.push(data[i]);
-    }
-  }
-  
-  return peaks;
-}
-
-// 计算自适应阈值
-function calculateAdaptiveThreshold(data: { timestamp: number; value: number }[]): number {
-  // 简单实现：使用信号平均值加上标准差的倍数
-  let sum = 0;
-  let sumSquared = 0;
-  
-  for (const point of data) {
-    sum += point.value;
-    sumSquared += point.value * point.value;
-  }
-  
-  const mean = sum / data.length;
-  const variance = (sumSquared / data.length) - (mean * mean);
-  const stdDev = Math.sqrt(variance);
-  
-  return mean + 1.5 * stdDev; // 阈值为平均值加上1.5倍标准差
-}
-
-// 从信号中估计呼吸率
-function estimateRateFromSignal(signal: { timestamp: number; value: number }[]): number {
-  if (signal.length < 2) return 0;
-  
-  // 应用快速傅里叶变换 (FFT) 分析信号频率
-  const values = signal.map(point => point.value);
-  const frequencies = performFFT(values);
-  
-  // 找出0.1-0.5Hz范围内的主频率（对应6-30次/分钟的呼吸率）
-  const respiratoryFrequency = findDominantFrequency(frequencies, 0.1, 0.5);
-  
-  // 转换为每分钟呼吸次数
-  return respiratoryFrequency * 60;
-}
-
-// 简化的FFT实现（实际应用中应使用更高效的FFT库）
-function performFFT(values: number[]): { frequency: number; magnitude: number }[] {
-  // 这里是简化实现，实际应用中应使用专业FFT库
-  // 例如可以使用Web Audio API或第三方库如fft.js
-  
-  // 模拟FFT结果
-  const sampleRate = 250; // 假设采样率为250Hz
-  const frequencies: { frequency: number; magnitude: number }[] = [];
-  
-  // 简单的频谱分析模拟
-  for (let freq = 0; freq < sampleRate / 2; freq += 0.01) {
-    let real = 0;
-    let imag = 0;
+    if (cnt - 1 < 0) continue;
     
-    for (let i = 0; i < values.length; i++) {
-      const phase = (2 * Math.PI * freq * i) / sampleRate;
-      real += values[i] * Math.cos(phase);
-      imag -= values[i] * Math.sin(phase);
+    if (signal[cnt].value < signal[cnt - 1].value) {
+      while (signal[cnt].value < signal[cnt - 1].value) {
+        cnt -= 1;
+        if (cnt < 0) break;
+      }
+    } else if (signal[cnt].value < signal[cnt + 1].value) {
+      while (signal[cnt].value < signal[cnt + 1].value) {
+        cnt += 1;
+        if (cnt >= signal.length) break;
+      }
     }
     
-    const magnitude = Math.sqrt(real * real + imag * imag) / values.length;
-    frequencies.push({ frequency: freq, magnitude });
+    peaksCorrectedList.push(cnt);
   }
   
-  return frequencies;
+  return peaksCorrectedList;
 }
 
-// 在指定频率范围内找出主频率
-function findDominantFrequency(
-  frequencies: { frequency: number; magnitude: number }[], 
-  minFreq: number, 
-  maxFreq: number
-): number {
-  let maxMagnitude = 0;
-  let dominantFrequency = 0;
+// 提取QRS复合波
+function extractQrsComplexes(rpeaksCorr: number[], ecg: { timestamp: number; value: number }[]): number[][] {
+  const beatsDuration = Array.from({ length: QRS_INTERVAL[1] - QRS_INTERVAL[0] + 1 }, (_, i) => QRS_INTERVAL[0] + i);
   
-  for (const { frequency, magnitude } of frequencies) {
-    if (frequency >= minFreq && frequency <= maxFreq && magnitude > maxMagnitude) {
-      maxMagnitude = magnitude;
-      dominantFrequency = frequency;
+  // 应用带通滤波器清洁QRS复合波
+  const data = bandpassFilter(ecg.map(d => d.value), F1 * 2, F2 * 2);
+  
+  // 初始化beats矩阵
+  const beats: number[][] = Array(beatsDuration.length).fill(0).map(() => Array(rpeaksCorr.length).fill(0));
+  
+  // 对于每个心跳，根据预定义的QRS间隔提取QRS复合波
+  for (let i = 0; i < rpeaksCorr.length; i++) {
+    for (let j = 0; j < beatsDuration.length; j++) {
+      const idx = rpeaksCorr[i] + QRS_INTERVAL[0] + j;
+      if (idx >= 0 && idx < data.length) {
+        beats[j][i] = data[idx];
+      }
     }
   }
   
-  return dominantFrequency;
+  return beats;
 }
 
-// 融合多种方法得到的呼吸率
-function fuseRespiratoryRates(rates: number[]): number {
-  // 过滤掉无效值
-  const validRates = rates.filter(rate => rate > 0);
+// 估计呼吸率
+function rrEstimator(qrses: number[][], rpeaksCorr: number[]): number[] {
+  // 计算每个QRS复合波的RMS值
+  const rms: number[] = Array(qrses[0].length).fill(0);
   
-  if (validRates.length === 0) return 0;
-  
-  // 简单加权平均
-  // 可以根据信号质量调整权重
-  const weights = [0.4, 0.4, 0.2]; // AM, FM, BM的权重
-  let weightedSum = 0;
-  let weightSum = 0;
-  
-  for (let i = 0; i < validRates.length; i++) {
-    weightedSum += validRates[i] * weights[i];
-    weightSum += weights[i];
+  for (let i = 0; i < rms.length; i++) {
+    let sumSquared = 0;
+    for (let j = 0; j < qrses.length; j++) {
+      sumSquared += qrses[j][i] ** 2;
+    }
+    rms[i] = Math.sqrt(sumSquared / qrses.length);
   }
   
-  return weightedSum / weightSum;
+  // 生成RMS值的功率谱并估计RR
+  const freqVector = Array.from({ length: FFT_LENGTH / 2 + 1 }, (_, i) => i * 0.5 / (FFT_LENGTH / 2));
+  const rrint = rpeaksCorr.slice(1).map((val, idx) => val - rpeaksCorr[idx]);
+  const resprate: number[] = [];
+  
+  for (let i = 0; i < rms.length; i++) {
+    if (i < HEARTBEAT_WINDOW) {
+      continue;
+    }
+    
+    const section = rms.slice(i - HEARTBEAT_WINDOW, i);
+    const rrintMed = median(rrint.slice(i - HEARTBEAT_WINDOW, i));
+    
+    if (rrintMed > 100) {
+      // 根据中值HR和预定义的RR范围计算频率映射范围
+      const respRange = [10, 40]; // 默认呼吸率范围
+      const fpeaks = freqVector.map((f, idx) => ({ 
+        idx, 
+        f, 
+        inRange: f > respRange[0] * rrintMed / 60000 && f < respRange[1] * rrintMed / 60000 
+      })).filter(p => p.inRange).map(p => p.idx);
+      
+      if (fpeaks.length === 0) continue;
+      
+      // 计算RMS值移动窗口的功率谱
+      const spectrum = performFFT(section.map(v => v - mean(section)));
+      const spectrumMod = spectrum.slice(0, FFT_LENGTH / 2 + 1).map(c => c.real * c.real + c.imag * c.imag);
+      
+      // 找出功率谱峰值的位置
+      let maxIdx = fpeaks[0];
+      let maxVal = spectrumMod[fpeaks[0]];
+      
+      for (let j = 1; j < fpeaks.length; j++) {
+        if (spectrumMod[fpeaks[j]] > maxVal) {
+          maxVal = spectrumMod[fpeaks[j]];
+          maxIdx = fpeaks[j];
+        }
+      }
+      
+      // 估计呼吸率
+      resprate.push(freqVector[maxIdx] * 60000 / rrintMed);
+    } else {
+      // 使用默认频率映射
+      const fpeaks = freqVector.map((f, idx) => ({ 
+        idx, 
+        f, 
+        inRange: f > FREQ_RANGE[0] && f < FREQ_RANGE[1] 
+      })).filter(p => p.inRange).map(p => p.idx);
+      
+      if (fpeaks.length === 0) continue;
+      
+      // 计算RMS值移动窗口的功率谱
+      const spectrum = performFFT(section.map(v => v - mean(section)));
+      const spectrumMod = spectrum.slice(0, FFT_LENGTH / 2 + 1).map(c => c.real * c.real + c.imag * c.imag);
+      
+      // 找出功率谱峰值的位置
+      let maxIdx = fpeaks[0];
+      let maxVal = spectrumMod[fpeaks[0]];
+      
+      for (let j = 1; j < fpeaks.length; j++) {
+        if (spectrumMod[fpeaks[j]] > maxVal) {
+          maxVal = spectrumMod[fpeaks[j]];
+          maxIdx = fpeaks[j];
+        }
+      }
+      
+      // 估计呼吸率
+      resprate.push(freqVector[maxIdx] * 60);
+    }
+  }
+  
+  return resprate;
+}
+
+// 平滑呼吸率
+function smoothRR(resprate: number[]): number {
+  if (resprate.length === 0) return 0;
+  
+  // 平滑数据，确定窗口中的中值
+  const resprateMwa: number[] = Array(resprate.length).fill(0);
+  
+  for (let i = 0; i < resprate.length; i++) {
+    if (i > 0 && i < AVERAGING_WINDOW) {
+      resprateMwa[i] = resprate[i];
+    } else if (i >= AVERAGING_WINDOW) {
+      const ind = Array.from({ length: AVERAGING_WINDOW }, (_, j) => i - AVERAGING_WINDOW + j);
+      // 每个移动窗口的中值RR
+      resprateMwa[i] = median(ind.map(idx => {
+        // 确保索引在有效范围内
+        if (idx >= 0 && idx < resprate.length) {
+          return resprate[idx];
+        }
+        return 0;
+      }).filter(val => val > 0)); // 过滤掉无效值
+    } else {
+      resprateMwa[i] = resprate[i];
+    }
+  }
+  
+  // 返回最后一个平滑的估计RR，如果数组为空则返回0
+  return resprateMwa.length > 0 ? resprateMwa[resprateMwa.length - 1] : 0;
+}
+
+// 执行FFT
+interface Complex {
+  real: number;
+  imag: number;
+}
+
+function performFFT(values: number[]): Complex[] {
+  // 确保输入长度为2的幂
+  const paddedValues = [...values];
+  while (paddedValues.length < FFT_LENGTH) {
+    paddedValues.push(0);
+  }
+  
+  // 递归实现FFT
+  function fft(x: Complex[]): Complex[] {
+    const N = x.length;
+    
+    if (N <= 1) {
+      return x;
+    }
+    
+    // 分解为偶数和奇数部分
+    const even: Complex[] = [];
+    const odd: Complex[] = [];
+    
+    for (let i = 0; i < N; i += 2) {
+      even.push(x[i]);
+      if (i + 1 < N) {
+        odd.push(x[i + 1]);
+      }
+    }
+    
+    // 递归计算
+    const evenFFT = fft(even);
+    const oddFFT = fft(odd);
+    
+    // 合并结果
+    const result: Complex[] = Array(N).fill({ real: 0, imag: 0 });
+    
+    for (let k = 0; k < N / 2; k++) {
+      const t = oddFFT[k];
+      const angle = -2 * Math.PI * k / N;
+      const twiddle = { real: Math.cos(angle), imag: Math.sin(angle) };
+      
+      // 复数乘法
+      const twiddleT = { 
+        real: twiddle.real * t.real - twiddle.imag * t.imag,
+        imag: twiddle.real * t.imag + twiddle.imag * t.real
+      };
+      
+      // 蝶形运算
+      result[k] = { 
+        real: evenFFT[k].real + twiddleT.real,
+        imag: evenFFT[k].imag + twiddleT.imag
+      };
+      
+      result[k + N / 2] = { 
+        real: evenFFT[k].real - twiddleT.real,
+        imag: evenFFT[k].imag - twiddleT.imag
+      };
+    }
+    
+    return result;
+  }
+  
+  // 将实数转换为复数
+  const complexInput = paddedValues.map(v => ({ real: v, imag: 0 }));
+  
+  // 执行FFT
+  return fft(complexInput);
+}
+
+// 辅助函数：计算平均值
+function mean(arr: number[]): number {
+  return arr.reduce((a, b) => a + b, 0) / arr.length;
+}
+
+// 辅助函数：计算中位数
+function median(arr: number[]): number {
+  if (arr.length === 0) return 0;
+  
+  const sorted = [...arr].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  
+  return sorted.length % 2 === 0
+    ? (sorted[mid - 1] + sorted[mid]) / 2
+    : sorted[mid];
 }
