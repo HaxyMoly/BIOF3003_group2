@@ -12,6 +12,8 @@ import SessionHistory from "./components/SessionHistory";
 import { useSessionData } from "./hooks/useSessionData";
 import { playBackgroundMusic, stopBackgroundMusic } from "./utils/backgroundMusic";
 import DynamicPerformanceSummary from "./components/DynamicPerformanceSummary";
+import RespirationChart from "./components/RespirationChart";
+import RPeaksChart from './components/RPeaksChart';
 
 export default function Home() {
   const {
@@ -26,7 +28,8 @@ export default function Home() {
     isECGStreaming,
   } = useHeartRateSensor();
 
-  const { respiratoryRate } = useRespiratoryRate(ecgData);
+  // 从useRespiratoryRate钩子中解构出rPeaks和sPeaks
+  const { respiratoryRate, respirationSignal, rPeaks, sPeaks } = useRespiratoryRate(ecgData);
   const { saveSession, fetchSessions } = useSessionData();  // Add fetchSessions here
 
   const [finalHeartRate, setFinalHeartRate] = useState<number | null>(null);
@@ -286,7 +289,19 @@ export default function Home() {
       {isConnected && (
         <div className="max-w-4xl mx-auto mt-8 bg-white p-4 rounded-lg shadow-inner">
           <h2 className="text-xl font-bold text-gray-800 mb-4">Real-Time ECG Data</h2>
-          <ECGChart ecgData={ecgData} />
+          <ECGChart 
+            ecgData={ecgData} 
+            rPeaks={rPeaks} 
+            sPeaks={sPeaks} 
+          />
+        </div>
+      )}
+
+      {/* 呼吸信号可视化部分 */}
+      {isConnected && respirationSignal && respirationSignal.length > 0 && (
+        <div className="max-w-4xl mx-auto mt-8 bg-white p-4 rounded-lg shadow-inner">
+          <h2 className="text-xl font-bold text-gray-800 mb-4">Respiratory Signal</h2>
+          <RespirationChart respirationSignal={respirationSignal} />
         </div>
       )}
 
@@ -300,6 +315,16 @@ export default function Home() {
           />
         </div>
       )}
+      
+      {/* {isConnected && (
+        <div className="max-w-4xl mx-auto mt-8 bg-white p-4 rounded-lg shadow-inner">
+          <h2 className="text-xl font-bold text-gray-800 mb-4">R波峰值检测</h2>
+          <RPeaksChart 
+            ecgData={ecgData} 
+            rPeaks={rPeaks || []}
+          />
+        </div>
+      )} */}
       
       {/* Session History Section - 始终显示，不再有条件判断 */}
       <div className="max-w-4xl mx-auto mt-8">

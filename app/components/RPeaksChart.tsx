@@ -10,13 +10,12 @@ interface ECGDataPoint {
   value: number;
 }
 
-interface ECGChartProps {
+interface RPeaksChartProps {
   ecgData: ECGDataPoint[];
-  rPeaks?: number[]; // R波峰值索引
-  sPeaks?: number[]; // S波峰值索引
+  rPeaks: number[];
 }
 
-const ECGChart: React.FC<ECGChartProps> = ({ ecgData, rPeaks = [], sPeaks = [] }) => {
+const RPeaksChart: React.FC<RPeaksChartProps> = ({ ecgData, rPeaks }) => {
   const dataToShow = ecgData.slice(-1000);
   
   const formatTimestamp = (timestamp: number): string => {
@@ -29,11 +28,10 @@ const ECGChart: React.FC<ECGChartProps> = ({ ecgData, rPeaks = [], sPeaks = [] }
     }
   };
 
-  // 创建R波和S波的散点数据
-  const rPeakPoints: { x: number; y: number }[] = [];
-  const sPeakPoints: { x: number; y: number }[] = [];
+  // 创建R波峰值数据点
+  const rPeakValues: number[] = new Array(dataToShow.length).fill(null);
   
-  // 只处理最近1000个数据点中的R波和S波
+  // 只处理最近1000个数据点中的R波
   const startIndex = Math.max(0, ecgData.length - 1000);
   
   // 找出在当前显示范围内的R波点
@@ -41,53 +39,29 @@ const ECGChart: React.FC<ECGChartProps> = ({ ecgData, rPeaks = [], sPeaks = [] }
     if (peakIndex >= startIndex && peakIndex < startIndex + 1000) {
       const relativeIndex = peakIndex - startIndex;
       if (relativeIndex >= 0 && relativeIndex < dataToShow.length) {
-        rPeakPoints.push({
-          x: relativeIndex,
-          y: dataToShow[relativeIndex].value
-        });
-      }
-    }
-  });
-  
-  // 找出在当前显示范围内的S波点
-  sPeaks.forEach(peakIndex => {
-    if (peakIndex >= startIndex && peakIndex < startIndex + 1000) {
-      const relativeIndex = peakIndex - startIndex;
-      if (relativeIndex >= 0 && relativeIndex < dataToShow.length) {
-        sPeakPoints.push({
-          x: relativeIndex,
-          y: dataToShow[relativeIndex].value
-        });
+        rPeakValues[relativeIndex] = dataToShow[relativeIndex].value;
       }
     }
   });
 
-  const ecgChartData = {
+  const chartData = {
     labels: dataToShow.map((point) => formatTimestamp(point.timestamp)),
     datasets: [
       {
         label: 'ECG',
-        data: dataToShow.map((point, index) => ({ x: index, y: point.value })),
-        borderColor: 'rgb(75, 192, 192)',
-        backgroundColor: 'rgba(75, 192, 192, 0.5)',
-        borderWidth: 1.5,
+        data: dataToShow.map(point => point.value),
+        borderColor: 'rgba(75, 192, 192, 0.3)',
+        backgroundColor: 'rgba(75, 192, 192, 0.1)',
+        borderWidth: 1,
         pointRadius: 0,
         tension: 0.2,
       },
       {
-        label: 'R-Peak',
-        data: rPeakPoints,
-        borderColor: 'rgb(255, 99, 132)',
-        backgroundColor: 'rgb(255, 99, 132)',
-        pointRadius: 4,
-        pointHoverRadius: 6,
-        showLine: false,
-      },
-      {
-        label: 'S-Peak',
-        data: sPeakPoints,
-        borderColor: 'rgb(54, 162, 235)',
-        backgroundColor: 'rgb(54, 162, 235)',
+        label: 'R波峰值',
+        data: rPeakValues,
+        borderColor: 'rgba(255, 99, 132, 1)',
+        backgroundColor: 'rgba(255, 99, 132, 0.8)',
+        borderWidth: 0,
         pointRadius: 4,
         pointHoverRadius: 6,
         showLine: false,
@@ -107,7 +81,7 @@ const ECGChart: React.FC<ECGChartProps> = ({ ecgData, rPeaks = [], sPeaks = [] }
       },
       title: {
         display: true,
-        text: 'Real-time ECG',
+        text: 'R波峰值检测',
       },
       tooltip: {
         enabled: true,
@@ -115,27 +89,25 @@ const ECGChart: React.FC<ECGChartProps> = ({ ecgData, rPeaks = [], sPeaks = [] }
           label: function(context: any) {
             const datasetLabel = context.dataset.label || '';
             const value = context.parsed.y;
-            return `${datasetLabel}: ${value.toFixed(2)} µV`;
+            if (value !== null) {
+              return `${datasetLabel}: ${value.toFixed(2)} µV`;
+            }
+            return '';
           }
         }
       }
     },
     scales: {
       x: {
-        type: 'linear' as const,
-        position: 'bottom' as const,
+        type: 'category' as const,
         title: {
           display: true,
-          text: 'Sample Index',
+          text: '时间',
         },
         ticks: {
           maxTicksLimit: 10,
-          callback: function(value: any) {
-            if (value >= 0 && value < dataToShow.length) {
-              return formatTimestamp(dataToShow[value].timestamp);
-            }
-            return '';
-          }
+          maxRotation: 0,
+          autoSkip: true
         },
         grid: {
           color: 'rgba(0, 0, 0, 0.1)',
@@ -144,7 +116,7 @@ const ECGChart: React.FC<ECGChartProps> = ({ ecgData, rPeaks = [], sPeaks = [] }
       y: {
         title: {
           display: true,
-          text: 'Voltage (µV)',
+          text: '电压 (µV)',
         },
         grid: {
           color: 'rgba(0, 0, 0, 0.1)',
@@ -153,16 +125,16 @@ const ECGChart: React.FC<ECGChartProps> = ({ ecgData, rPeaks = [], sPeaks = [] }
     },
   };
 
-  // Handle empty data gracefully
+  // 处理空数据
   if (!Array.isArray(ecgData) || ecgData.length === 0) {
-    return <p className="text-gray-500">No ECG data</p>;
+    return <p className="text-gray-500">无ECG数据</p>;
   }
 
   return (
-    <div className="ecg-container" style={{ width: '100%', height: '400px', maxWidth: '1000px' }}>
-      <Line options={chartOptions} data={ecgChartData} />
+    <div className="rpeaks-container" style={{ width: '100%', height: '400px', maxWidth: '1000px' }}>
+      <Line options={chartOptions} data={chartData} />
     </div>
   );
 };
 
-export default ECGChart;
+export default RPeaksChart;
