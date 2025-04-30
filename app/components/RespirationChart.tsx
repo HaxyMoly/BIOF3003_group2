@@ -98,7 +98,7 @@ const RespirationChart: React.FC<RespirationChartProps> = ({
         labels: timeLabels,
         datasets: [
           {
-            label: 'R-S Amplitude difference',
+            label: 'Isolate the respiratory signal​',
             data: dataBufferRef.current,
             borderColor: 'rgb(153, 102, 255)',
             backgroundColor: 'rgba(153, 102, 255, 0.1)',
