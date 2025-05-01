@@ -2,7 +2,7 @@ import { useEffect, useState, useRef } from "react";
 
 // 参数定义
 const FS = 250;
-const WINDOW_SIZE = 10; // 秒
+const WINDOW_SIZE = 30; // 秒
 const MIN_RESP_RATE = 5;
 const MAX_RESP_RATE = 50;
 const UPDATE_INTERVAL = 10000;
@@ -55,7 +55,7 @@ export function useRespiratoryRate(ecgData: ECGPoint[]): RespiratoryRateHook {
         accumulatedRespSignalRef.current = [...accumulatedRespSignalRef.current, ...currentRespSignal];
         
         // 如果累积信号太长，保留最新的部分
-        const maxAccumulatedLength = 5000; // 设置一个上限以避免内存问题
+        const maxAccumulatedLength = 20000; // 设置一个上限以避免内存问题
         if (accumulatedRespSignalRef.current.length > maxAccumulatedLength) {
           accumulatedRespSignalRef.current = accumulatedRespSignalRef.current.slice(-maxAccumulatedLength);
         }
@@ -66,7 +66,7 @@ export function useRespiratoryRate(ecgData: ECGPoint[]): RespiratoryRateHook {
         setRespirationSignal(currentRespSignal);
         
         // 只有当累积的呼吸信号足够长时才计算呼吸率
-        const minRequiredLength = 3000; // 需要至少3000个点
+        const minRequiredLength = 10000; // 需要至少3000个点
         if (accumulatedRespSignalRef.current.length >= minRequiredLength) {
           // 使用累积的呼吸信号计算呼吸率
           const respRate = estimateRespiratoryRateFromRSAmplitude(accumulatedRespSignalRef.current);

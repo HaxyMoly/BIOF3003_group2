@@ -77,7 +77,7 @@ const HRVChart: React.FC<HRVChartProps> = ({ ecgData = [], onHRVUpdate }) => {
   };
 
   useEffect(() => {
-    const recentEcgData = ecgData.slice(-5000); // Use only the most recent data
+    const recentEcgData = ecgData.slice(-10000); // Use only the most recent data
     if (Array.isArray(recentEcgData) && recentEcgData.length > 0) {
       const rPeaks = detectRPeaks(recentEcgData); // Detect R-peaks
       console.log("Detected R-peaks:", rPeaks);
